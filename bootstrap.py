@@ -24,6 +24,10 @@ import sys
 import threading
 import time
 
+# 双保险：即使启动器没有注入 PYTHONDONTWRITEBYTECODE，也不允许写入 .pyc。
+# 向 App 包内写入任何新文件都会破坏代码签名密封。
+sys.dont_write_bytecode = True
+
 HOME = os.path.expanduser("~")
 VOICE_DIR = os.path.join(HOME, ".voicetype")
 PYLIBS = os.path.join(VOICE_DIR, "pylibs")

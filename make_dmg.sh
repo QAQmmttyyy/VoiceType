@@ -38,6 +38,15 @@ if [ ! -d "/Applications/VoiceType.app" ]; then
     ./build.sh
 fi
 
+# 防呆：若源码比已构建的二进制新，说明忘记重新构建，直接中止，
+# 避免把缺少最新修复的旧包公证并发布出去。
+for src in voice_type.py bootstrap.py native_launcher.m requirements.txt; do
+    if [ "$src" -nt "/Applications/VoiceType.app/Contents/MacOS/VoiceType" ]; then
+        echo "❌ $src 比已构建的应用新，请先执行 ./build.sh 再打包。"
+        exit 1
+    fi
+done
+
 cp -R /Applications/VoiceType.app "$STAGE_DIR/VoiceType.app"
 ln -s /Applications "$STAGE_DIR/Applications"
 

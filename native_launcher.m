@@ -122,6 +122,11 @@ int main(int argc, char *argv[]) {
 
         setenv("PYTHONHOME", pyroot, 1);
         setenv("PYTHONNOUSERSITE", "1", 1);
+        // 关键：禁止 Python 向 App 内部写 .pyc 字节码缓存。
+        // 应用包在 /Applications 下是可写的，Python 默认会在 __pycache__ 下生成缓存，
+        // 这会新增文件、破坏代码签名的资源密封，导致 Gatekeeper 报
+        // “a sealed resource is missing or invalid”，用户跑一次就坏。
+        setenv("PYTHONDONTWRITEBYTECODE", "1", 1);
         setenv("VOICETYPE_PYTHON", python_bin, 1);
         setenv("VOICETYPE_APP_DIR", resources_dir, 1);
         setenv("HF_ENDPOINT", "https://hf-mirror.com", 1);
