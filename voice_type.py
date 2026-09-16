@@ -1199,17 +1199,33 @@ open -n '{bundle_path}'
         time.sleep(0.04)
 
         from Quartz import (
-            CGEventCreateKeyboardEvent, CGEventPost, kCGSessionEventTap
+            CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags,
+            kCGSessionEventTap, kCGEventFlagMaskCommand,
         )
         V, CMD = 9, 55
 
-        CGEventPost(kCGSessionEventTap, CGEventCreateKeyboardEvent(None, CMD, True))
+        # 关键：V 键事件必须自带 Command 修饰符。
+        # 仅靠前面单独发一个 Cmd 按下事件是不够的：输入法（如中文拼音的 v 模式）
+        # 是根据事件自身的 flags 判断修饰键的，读不到 Command 就会把它当成普通字母 v，
+        # 于是弹出「v+数字 / v+日期」的输入法候选面板。
+        cmd_down = CGEventCreateKeyboardEvent(None, CMD, True)
+        CGEventSetFlags(cmd_down, kCGEventFlagMaskCommand)
+
+        v_down = CGEventCreateKeyboardEvent(None, V, True)
+        CGEventSetFlags(v_down, kCGEventFlagMaskCommand)
+
+        v_up = CGEventCreateKeyboardEvent(None, V, False)
+        CGEventSetFlags(v_up, kCGEventFlagMaskCommand)
+
+        cmd_up = CGEventCreateKeyboardEvent(None, CMD, False)
+
+        CGEventPost(kCGSessionEventTap, cmd_down)
+        time.sleep(0.03)
+        CGEventPost(kCGSessionEventTap, v_down)
         time.sleep(0.02)
-        CGEventPost(kCGSessionEventTap, CGEventCreateKeyboardEvent(None, V, True))
+        CGEventPost(kCGSessionEventTap, v_up)
         time.sleep(0.02)
-        CGEventPost(kCGSessionEventTap, CGEventCreateKeyboardEvent(None, V, False))
-        time.sleep(0.02)
-        CGEventPost(kCGSessionEventTap, CGEventCreateKeyboardEvent(None, CMD, False))
+        CGEventPost(kCGSessionEventTap, cmd_up)
 
     # ---------- Dock 图标点击响应 ----------
     def applicationShouldHandleReopen_hasVisibleWindows_(self, sender, flag):
