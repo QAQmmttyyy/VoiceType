@@ -1,0 +1,43 @@
+# 运行时与缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+*.lock
+*.ips
+*.crash
+.DS_Store
+*.DS_Store
+**/.DS_Store
+
+# 本地签名与中间目录
+_CodeSignature/
+*.iconset/
+
+# 安装与打包产物 (严格禁止提交 DMG 等安装包)
+*.dmg
+dist/
+build/
+*.egg-info/
+
+# 虚拟环境与本地缓存
+.venv/
+venv/
+VoiceTypeEnv/
+.cache/
+
+# 本地临时诊断与测试
+diag_*.py
+test_*.py
+
+# 构建生成目录
+*.app/
+
+# 内置 Python 运行时（体积大，由 fetch_runtime.sh 生成）
+runtime/
+
+# 商业化文档（定价与营销策略，不进公开仓库）
+商品上架草稿.md
+
+# 商业化文案（不进公开仓库）
+发布文案.md

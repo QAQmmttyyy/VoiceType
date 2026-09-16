@@ -1,0 +1,20 @@
+# VoiceType 运行依赖（首次启动时由 bootstrap.py 读取并安装到 ~/.voicetype/pylibs）
+#
+# 说明：
+#   - PyObjC 的 objc / AppKit 已随 App 内置 Python 运行时提供，无需在此列出；
+#   - 其余 PyObjC 框架（Quartz / AVFoundation / ApplicationServices）供主程序调用系统 API 使用；
+#   - torch 固定为 2.11.0：该版本提供 macOS 11+ 的 arm64 wheel，
+#     更新的版本要求 macOS 14+，会抬高一档系统要求。
+torch==2.11.0
+funasr
+transformers
+numpy<3
+scipy
+soundfile
+sounddevice
+opencc-python-reimplemented
+kaldi-native-fbank
+modelscope
+pyobjc-framework-Quartz
+pyobjc-framework-AVFoundation
+pyobjc-framework-ApplicationServices
