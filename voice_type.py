@@ -14,7 +14,7 @@ VoiceType — macOS 桌面语音输入 App
 - 触发：按住 Option (⌥) 说话，松开自动识别并键入当前输入框
 - 引擎：阿里 SenseVoice + 本地 Qwen 标点保真修复
 """
-import os, time, math, threading, tempfile, subprocess, re, gc, fcntl, sys
+import os, time, math, threading, tempfile, subprocess, re, gc, fcntl, sys, atexit
 import numpy as np
 import scipy.signal
 import soundfile as sf
@@ -272,6 +272,122 @@ def to_simplified(text):
 
 
 # ==================== 2. 麦克风录音器 ====================
+class SystemVolume:
+    """录音期间自动压低系统输出音量，避免外放的声音被一起录进去。
+
+    直接通过 CoreAudio 读写默认输出设备的虚拟主音量，不走 osascript 子进程
+    （单次 osascript 约 100ms，会拖慢录音启动）。
+    任何一步失败都静默忽略，绝不因为音量控制问题影响录音本身。
+    """
+
+    DUCK_LEVEL = 0.10  # 压低到的音量（0.0 ~ 1.0）
+
+    _lib = None
+    _addr_cls = None
+
+    def __init__(self):
+        self._saved = None
+        self._lock = threading.Lock()
+
+    # ---------- 底层 CoreAudio 访问 ----------
+    @classmethod
+    def _load(cls):
+        if cls._lib is not None:
+            return cls._lib
+        from ctypes import (CDLL, Structure, c_uint32, c_int32,
+                            c_void_p, POINTER)
+
+        class _Addr(Structure):
+            _fields_ = [("sel", c_uint32), ("scope", c_uint32), ("elem", c_uint32)]
+
+        lib = CDLL("/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
+        lib.AudioObjectGetPropertyData.argtypes = [c_uint32, POINTER(_Addr), c_uint32,
+                                                  c_void_p, POINTER(c_uint32), c_void_p]
+        lib.AudioObjectGetPropertyData.restype = c_int32
+        lib.AudioObjectSetPropertyData.argtypes = [c_uint32, POINTER(_Addr), c_uint32,
+                                                  c_void_p, c_uint32, c_void_p]
+        lib.AudioObjectSetPropertyData.restype = c_int32
+
+        cls._lib = lib
+        cls._addr_cls = _Addr
+        return lib
+
+    @staticmethod
+    def _fourcc(s):
+        return int.from_bytes(s.encode(), "big")
+
+    @classmethod
+    def _volume_addr(cls):
+        # kAudioHardwareServiceDeviceProperty_VirtualMainVolume，作用域为输出
+        return cls._addr_cls(cls._fourcc("vmvc"), cls._fourcc("outp"), 0)
+
+    @classmethod
+    def _default_output(cls):
+        from ctypes import c_uint32, byref
+        lib = cls._load()
+        addr = cls._addr_cls(cls._fourcc("dOut"), cls._fourcc("glob"), 0)
+        size, dev = c_uint32(4), c_uint32(0)
+        st = lib.AudioObjectGetPropertyData(1, byref(addr), 0, None,
+                                            byref(size), byref(dev))
+        return dev.value if st == 0 and dev.value else None
+
+    @classmethod
+    def _get(cls):
+        from ctypes import c_uint32, c_float, byref
+        try:
+            dev = cls._default_output()
+            if dev is None:
+                return None
+            addr = cls._volume_addr()
+            size, val = c_uint32(4), c_float(0.0)
+            st = cls._load().AudioObjectGetPropertyData(dev, byref(addr), 0, None,
+                                                        byref(size), byref(val))
+            return float(val.value) if st == 0 else None
+        except Exception:
+            return None
+
+    @classmethod
+    def _set(cls, value):
+        from ctypes import c_uint32, c_float, byref
+        try:
+            dev = cls._default_output()
+            if dev is None:
+                return False
+            addr = cls._volume_addr()
+            val = c_float(float(value))
+            st = cls._load().AudioObjectSetPropertyData(dev, byref(addr), 0, None,
+                                                        c_uint32(4), byref(val))
+            return st == 0
+        except Exception:
+            return False
+
+    # ---------- 对外接口 ----------
+    def duck(self):
+        """录音开始：记住当前音量并压低。"""
+        with self._lock:
+            if self._saved is not None:
+                return
+            current = self._get()
+            if current is None or current <= self.DUCK_LEVEL:
+                return
+            if self._set(self.DUCK_LEVEL):
+                self._saved = current
+
+    def restore(self):
+        """录音结束：恢复原音量。
+
+        只在音量仍等于我们压低后的值时恢复，避免覆盖用户期间手动调的音量。
+        同时保证无论录音成功与否都不会把音量永久留在低位。
+        """
+        with self._lock:
+            if self._saved is None:
+                return
+            current = self._get()
+            if current is not None and abs(current - self.DUCK_LEVEL) < 0.005:
+                self._set(self._saved)
+            self._saved = None
+
+
 class Recorder:
     def __init__(self, device=None):
         self.device = device
@@ -825,6 +941,9 @@ class VoiceTypeApp(NSObject):
         self.tap_ready = False
         self.recorder = Recorder()
         self.hud = AppleStyleHUD()
+        self.volume = SystemVolume()
+        # 兵底保护：任何情况下退出都必须把音量恢复回去
+        atexit.register(self.volume.restore)
 
         # 状态栏图标：原生 SF Symbol 模板图标
         self.status_item = ak.NSStatusBar.systemStatusBar().statusItemWithLength_(ak.NSVariableStatusItemLength)
@@ -1003,6 +1122,9 @@ class VoiceTypeApp(NSObject):
         self.hud.show("done", "已清空本地模型文件", auto_hide=1.5)
 
     def restartApp_(self, sender):
+        # 0. 确保音量不会留在压低状态
+        self.volume.restore()
+
         # 1. 释放所有本地文件锁
         try:
             if _py_lock_fd:
@@ -1115,6 +1237,7 @@ open -n '{bundle_path}'
     def quit_(self, sender):
         if self.recording:
             self.recording = False
+        self.volume.restore()
         self.hud.hide()
         ak.NSApplication.sharedApplication().terminate_(None)
 
@@ -1123,11 +1246,15 @@ open -n '{bundle_path}'
     def _start_recording(self):
         self.recording = True
         self.hud.show("recording", "正在聆听...")
+        # 先压低系统音量再开始录音：外放的声音会从麦克风回来，被一起识别进去。
+        # 顺序不能反，否则开头那一段仍会录到外放声。
+        self.volume.duck()
         try:
             self.recorder.start()
         except Exception:
             self.hud.show("alert", "麦克风未就绪 · 检查权限", auto_hide=2.0)
             self.recording = False
+            self.volume.restore()
 
     @objc.python_method
     def _stop_recording(self):
@@ -1135,6 +1262,8 @@ open -n '{bundle_path}'
             return
         self.recording = False
         arr = self.recorder.stop()
+        # 录音已结束，不再有回声风险，立即恢复音量
+        self.volume.restore()
         self.hud.show("transcribing", "正在识别...")
         threading.Thread(target=self._transcribe, args=(arr,), daemon=True).start()
 
@@ -1231,6 +1360,15 @@ open -n '{bundle_path}'
     def applicationShouldHandleReopen_hasVisibleWindows_(self, sender, flag):
         self.settings_win.show()
         return True
+
+    # ---------- 进程退出保护 ----------
+    def applicationWillTerminate_(self, sender):
+        # 任何退出路径（含 Cmd+Q）都必须把音量恢复回去，
+        # 否则用户系统音量会永久卡在压低后的低位。
+        try:
+            self.volume.restore()
+        except Exception:
+            pass
 
 
 def main():

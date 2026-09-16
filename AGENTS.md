@@ -61,6 +61,15 @@
   有时读不到。无法通过单次测试稳定复现，也不能因为「本机测不出来」就认为没有问题。
 - 同一原则适用于任何需要修饰键的合成快捷键（Cmd+A/C/X、Shift+方向键等）。
 
+### 2.4.2 录音期间必须压低系统输出音量
+- 录音会通过空气把**外放的声音**一起收进麦克风（声学回声）。因此在 `_start_recording()`
+  里必须**先压低系统音量、再启动录音器**，顺序不能反；`_stop_recording()` 里录音一结束就恢复。
+- 音量通过 CoreAudio 的 `kAudioHardwareServiceDeviceProperty_VirtualMainVolume`（`vmvc`/`outp`）
+  直接读写，**不要用 `osascript` 子进程**（单次约 100ms，会拖慢录音启动并漏录开头的外放声）。
+- 恢复音量时必须**先确认当前值仍是我们压低后的值**，否则会覆盖用户期间的手动调整。
+- 必须在**所有退出路径**上恢复音量（菜单退出、`applicationWillTerminate_`、重启），
+  否则用户的系统音量会永久卡在低位。注意嵌入式 Python 里 `atexit` 不一定执行，不能只依赖它。
+
 ### 2.5 运行环境必须自包含
 - **禁止依赖 Homebrew 或系统 Python**：应用的 Python 运行时随包分发（`Contents/Resources/python/`），
   不得在代码或构建脚本中引用 `/opt/homebrew/...` 或 `/usr/bin/python3`。
