@@ -132,6 +132,16 @@
 - 修改任何代码后，必须重新执行 `./build.sh` **和** `./make_dmg.sh`；
   只重新构建而不重新公证，会把旧的、缺修复的二进制发出去（本项目已踩过一次）。
 
+### 2.6.4 公证与装订必须关掉全部系统代理
+- `notarytool` 与 `stapler` 走的是**系统代理（CFNetwork）**，不读 shell 环境变量。
+  本地 Clash 类代理会把连接导向 `127.0.0.1` 回环，表现为 SSL 错误（`-1200 / -9816`）或长时间挂起。
+- 必须临时关闭 **web / secure web / socks 三种**代理，结束后按原状态还原。
+  **只关 web 代理不够**：SOCKS 代理同样会把 `stapler` 导向回环，导致装订失败。
+- 不要依赖 `notarytool submit --wait`：网络抖动会让等待阶段抛 SSL 错误而中断整个流程。
+  改为提交后拿 ID、主动轮询 `notarytool info`，并在失败时输出 `notarytool log` 便于定位。
+- 装订失败时 `spctl` 仍可能显示 `accepted`（联网校验）。这只是假象——
+  **离线安装依赖已装订的票据**，必须用 `xcrun stapler validate` 单独确认。
+
 ### 2.7 仓库清洁规范
 - 严禁将 DMG 安装包、调试脚本、临时崩溃日志（`.ips`）或个人签名证书提交到 Git 仓库。
 - `runtime/`（内置 Python 运行时）体积较大，由 `fetch_runtime.sh` 生成，已被 git 忽略，不得提交。

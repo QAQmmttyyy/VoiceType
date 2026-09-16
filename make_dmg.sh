@@ -128,23 +128,52 @@ echo "==> 5. 使用 Developer ID 对 DMG 签名..."
 codesign --sign "$SIGN_ID" --timestamp "$DMG_NAME"
 
 echo "==> 6. 提交 Apple 官方公证 (Notarization)..."
-# 记录当前系统代理状态，公证上传走 CFNetwork 时需避开本地 Clash 代理挂起
+# notarytool 与 stapler 走的是系统代理（CFNetwork），不走 shell 环境变量。
+# 本地 Clash 类代理会把连接导向 127.0.0.1 回环，导致 SSL 错误或长时间挂起，
+# 因此必须把 web / secure web / socks 三种代理全部临时关闭，结束后原样还原。
 WEB_WAS_ON="$(networksetup -getwebproxy "$SERVICE" 2>/dev/null | awk '{if ($1=="Enabled:") print $2}')"
 SECURE_WAS_ON="$(networksetup -getsecurewebproxy "$SERVICE" 2>/dev/null | awk '{if ($1=="Enabled:") print $2}')"
+SOCKS_WAS_ON="$(networksetup -getsocksfirewallproxy "$SERVICE" 2>/dev/null | awk '{if ($1=="Enabled:") print $2}')"
 
 restore_system_proxy() {
     [ "$WEB_WAS_ON" = "Yes" ] && networksetup -setwebproxystate "$SERVICE" on 2>/dev/null || true
     [ "$SECURE_WAS_ON" = "Yes" ] && networksetup -setsecurewebproxystate "$SERVICE" on 2>/dev/null || true
+    [ "$SOCKS_WAS_ON" = "Yes" ] && networksetup -setsocksfirewallproxystate "$SERVICE" on 2>/dev/null || true
 }
 trap restore_system_proxy EXIT
 
 networksetup -setwebproxystate "$SERVICE" off 2>/dev/null || true
 networksetup -setsecurewebproxystate "$SERVICE" off 2>/dev/null || true
+networksetup -setsocksfirewallproxystate "$SERVICE" off 2>/dev/null || true
+sleep 2
 
 echo "    正在上传至 Apple 公证服务器，请稍候..."
-xcrun notarytool submit "$DMG_NAME" --keychain-profile "$PROFILE" --wait
+SUBMIT_OUT="$(xcrun notarytool submit "$DMG_NAME" --keychain-profile "$PROFILE" 2>&1)"
+echo "$SUBMIT_OUT" | grep -E "id:|status:" | head -n 3
+JOB_ID="$(echo "$SUBMIT_OUT" | awk '/^ *id:/{print $2; exit}')"
 
-restore_system_proxy
+if [ -z "$JOB_ID" ]; then
+    echo "❌ 未能取得公证提交 ID"
+    exit 1
+fi
+
+# 不依赖 submit --wait：网络抖动会让等待阶段抛 SSL 错误，
+# 改为主动轮询状态，抖动时重试而不是中断。
+STATUS=""
+for _ in $(seq 1 60); do
+    sleep 10
+    STATUS="$(xcrun notarytool info "$JOB_ID" --keychain-profile "$PROFILE" 2>/dev/null | awk '/^ *status:/{print $2}')"
+    [ -z "$STATUS" ] && continue
+    echo "    状态: $STATUS"
+    [ "$STATUS" != "In Progress" ] && break
+done
+
+if [ "$STATUS" != "Accepted" ]; then
+    echo "❌ 公证未通过（状态: $STATUS），审计日志如下："
+    xcrun notarytool log "$JOB_ID" --keychain-profile "$PROFILE" 2>&1 | head -n 40
+    exit 1
+fi
+echo "    ✅ Apple 官方公证通过（$JOB_ID）"
 
 echo "==> 7. 装订 (Staple) 公证票据..."
 xcrun stapler staple "$DMG_NAME"

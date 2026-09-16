@@ -11,7 +11,7 @@ VoiceType — macOS 桌面语音输入 App
     3. 支持一键安全重启生效 (open -n 独立实例接力)
     4. 麦克风、辅助功能、输入监控三大权限实时动态检测与自愈
 - 音频处理：纯内存 scipy 极速高保真重采样 (彻底解耦外部 ffmpeg)
-- 触发：按住 Option (⌥) 说话，松开自动识别并键入当前输入框
+- 触发：按住键盘右侧 Option (⌥) 说话，松开自动识别并键入当前输入框
 - 引擎：阿里 SenseVoice + 本地 Qwen 标点保真修复
 """
 import os, time, math, threading, tempfile, subprocess, re, gc, fcntl, sys, atexit
@@ -633,13 +633,13 @@ class SettingsWindow:
         title_lbl.setStringValue_("VoiceType 语音输入")
         cv.addSubview_(title_lbl)
 
-        sub_lbl = ak.NSTextField.alloc().initWithFrame_(ak.NSMakeRect(80, h - 72, 280, 18))
+        sub_lbl = ak.NSTextField.alloc().initWithFrame_(ak.NSMakeRect(80, h - 72, 364, 18))
         sub_lbl.setBezeled_(False)
         sub_lbl.setDrawsBackground_(False)
         sub_lbl.setEditable_(False)
         sub_lbl.setFont_(ak.NSFont.systemFontOfSize_(12))
         sub_lbl.setTextColor_(ak.NSColor.secondaryLabelColor())
-        sub_lbl.setStringValue_("极速本地离线识别 · 长按 Option (⌥) 键即时打字")
+        sub_lbl.setStringValue_("本地离线识别 · 长按右侧 Option (⌥) 即时打字")
         cv.addSubview_(sub_lbl)
 
         # 2. 核心系统权限卡片 (高度 195：内聚包含三大权限 + 清理残留与重启生效)
@@ -1038,7 +1038,7 @@ class VoiceTypeApp(NSObject):
             self.settings_win.show()
             self.hud.show("alert", "请在控制中心完成权限配置", auto_hide=3.0)
         else:
-            self.hud.show("done", "VoiceType 已就绪 · 长按 Option 说话", auto_hide=2.0)
+            self.hud.show("done", "VoiceType 已就绪 · 长按右侧 Option 说话", auto_hide=2.0)
 
 
 
