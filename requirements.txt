@@ -7,7 +7,6 @@
 #     更新的版本要求 macOS 14+，会抬高一档系统要求。
 torch==2.11.0
 funasr
-transformers
 numpy<3
 scipy
 soundfile

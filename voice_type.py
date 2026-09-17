@@ -12,7 +12,7 @@ VoiceType — macOS 桌面语音输入 App
     4. 麦克风、辅助功能、输入监控三大权限实时动态检测与自愈
 - 音频处理：纯内存 scipy 极速高保真重采样 (彻底解耦外部 ffmpeg)
 - 触发：按住键盘右侧 Option (⌥) 说话，松开自动识别并键入当前输入框
-- 引擎：阿里 SenseVoice + 本地 Qwen 标点保真修复
+- 引擎：阿里 SenseVoice（自带标点与逆文本规整，不依赖额外的标点模型）
 """
 import os, time, math, threading, tempfile, subprocess, re, gc, fcntl, sys, atexit
 import numpy as np
@@ -70,7 +70,6 @@ VOICE_DIR = os.path.expanduser("~/.voicetype")
 PYLIBS_DIR = os.path.join(VOICE_DIR, "pylibs")
 MODELS_DIR = os.path.join(VOICE_DIR, "models")
 SENSEVOICE_DIR = os.path.join(MODELS_DIR, "SenseVoiceSmall")
-QWEN_DIR = os.path.join(MODELS_DIR, "Qwen2.5-0.5B-Instruct")
 
 # 与 bootstrap.py 保持一致：以完成标记判定就绪，区分“下载完成”与“下载中断”。
 MODEL_MARKER = ".voicetype_complete"
@@ -110,15 +109,11 @@ def check_sensevoice_ready():
     return os.path.exists(os.path.join(SENSEVOICE_DIR, MODEL_MARKER))
 
 
-def check_qwen_ready():
-    return os.path.exists(os.path.join(QWEN_DIR, MODEL_MARKER))
-
-
-# ==================== 1. 语音与标点引擎 ====================
+# ==================== 1. 语音识别引擎 ====================
 def _pick_device():
     """优先使用 Apple Silicon 的 Metal GPU，不可用时回退 CPU。
 
-    实测（M2）：SenseVoice 提速约 9 倍，标点模型约 2.2 倍，且输出完全一致。
+    实测（M2）：SenseVoice 提速约 9 倍，且输出完全一致。
     """
     try:
         import torch
@@ -169,57 +164,8 @@ class SenseEngine:
         return text.strip()
 
 
-class PunctEngine:
-    _tok = None
-    _model = None
-    _lock = threading.Lock()
-
-    @classmethod
-    def reset(cls):
-        with cls._lock:
-            cls._tok = None
-            cls._model = None
-
-    @classmethod
-    def get(cls):
-        if cls._model is None:
-            with cls._lock:
-                if cls._model is None:
-                    from transformers import AutoTokenizer, AutoModelForCausalLM
-                    cls._tok = AutoTokenizer.from_pretrained(QWEN_DIR)
-                    model = AutoModelForCausalLM.from_pretrained(QWEN_DIR)
-                    cls._model = model.to(WARMUP_STATE["device"]).eval()
-        return cls._model
-
-    @staticmethod
-    def fix(text):
-        if not text or PunctEngine.get() is None:
-            return text
-        try:
-            import torch
-            msgs = [{"role": "user", "content": (
-                "请只给下面句子添加中文标点（逗号、句号、问号、顿号）。"
-                "绝对不要改写、增删、替换任何字符，输出的字必须与输入完全一致，只是加上标点：\n" + text)}]
-            tok, model = PunctEngine._tok, PunctEngine._model
-            prompt = tok.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
-            ids = tok(prompt, return_tensors="pt")
-            ids = {k: v.to(WARMUP_STATE["device"]) for k, v in ids.items()}
-            with torch.no_grad():
-                out = model.generate(**ids, max_new_tokens=180, do_sample=False)
-            gen = out[0][ids["input_ids"].shape[1]:].cpu()
-            fixed = tok.decode(gen, skip_special_tokens=True).strip()
-            if not fixed:
-                return text
-            strip = lambda s: re.sub(r"[，。！？、：；,.!?;: ]", "", s)
-            if strip(fixed) == strip(text):
-                return fixed
-            return text
-        except Exception:
-            return text
-
-
 def warmup_engines(notify=None):
-    """后台预热两个模型。
+    """后台预热识别模型。
 
     MPS 首次推理需要编译内核（约数秒），若不在启动时触发，
     用户第一次说话就会把这部分开销算进去。若所选设备预热失败，
@@ -229,7 +175,6 @@ def warmup_engines(notify=None):
         try:
             WARMUP_STATE["device"] = device
             SenseEngine.reset()
-            PunctEngine.reset()
 
             # 语音识别预热：一段 1 秒的静音音频
             sense = SenseEngine.get()
@@ -244,10 +189,6 @@ def warmup_engines(notify=None):
                     os.remove(tmp)
                 except Exception:
                     pass
-
-            # 标点预热：一句短文本
-            PunctEngine.get()
-            PunctEngine.fix("今天天气不错我们下午开会")
 
             WARMUP_STATE["ok"] = True
             print("[VoiceType] 计算设备: %s" % device, file=sys.stderr, flush=True)
@@ -709,15 +650,14 @@ class SettingsWindow:
         self.tip_lbl.setStringValue_("提示：更改系统权限后，点击上方「重启生效」以立即载入新权限。")
         cv.addSubview_(self.tip_lbl)
 
-        # 4. 本地离线 AI 引擎与模型状态卡片 (三大组件状态 + 磁盘占用 + 修复入口)
+        # 4. 本地离线 AI 引擎与模型状态卡片 (组件状态 + 磁盘占用 + 修复入口)
         engine_box = ak.NSBox.alloc().initWithFrame_(ak.NSMakeRect(20, h - 520, w - 40, 205))
         engine_box.setTitle_("本地离线 AI 引擎组件")
         engine_box.setTitleFont_(ak.NSFont.systemFontOfSize_weight_(12.5, ak.NSFontWeightMedium))
 
         engine_meta = [
-            ("deps", "运行依赖 (torch 等)", 150),
-            ("sensevoice", "SenseVoice 语音识别", 113),
-            ("qwen", "Qwen2.5 标点修复", 76),
+            ("deps", "运行依赖 (torch 等)", 143),
+            ("sensevoice", "SenseVoice 语音识别", 98),
         ]
         for key, name, py in engine_meta:
             lbl = ak.NSTextField.alloc().initWithFrame_(ak.NSMakeRect(16, py, 190, 20))
@@ -835,13 +775,11 @@ class SettingsWindow:
             mic_ok = check_microphone()
             deps_ok = check_deps_ready()
             sv_ok = check_sensevoice_ready()
-            qwen_ok = check_qwen_ready()
 
             sizes = {}
             for key, ok, path in (
                 ("deps", deps_ok, PYLIBS_DIR),
                 ("sensevoice", sv_ok, SENSEVOICE_DIR),
-                ("qwen", qwen_ok, QWEN_DIR),
             ):
                 prev = self.engine_state.get(key)
                 if prev is not None and prev[0] == ok:
@@ -860,11 +798,10 @@ class SettingsWindow:
 
                 self._update_engine_badge("deps", deps_ok, sizes["deps"])
                 self._update_engine_badge("sensevoice", sv_ok, sizes["sensevoice"])
-                self._update_engine_badge("qwen", qwen_ok, sizes["qwen"])
                 self._update_usage(total)
 
                 if acc_ok and input_ok and mic_ok:
-                    if deps_ok and sv_ok and qwen_ok:
+                    if deps_ok and sv_ok:
                         self.tip_lbl.setStringValue_("核心权限与本地引擎均已就绪：长按右侧 Option (⌥) 即可开始语音输入。")
                         self.tip_lbl.setTextColor_(ak.NSColor.systemGreenColor())
                     else:
@@ -1284,20 +1221,14 @@ open -n '{bundle_path}'
             self.hud.hide()
             return
 
-        # 1. 本地 Qwen 模型标点修复
-        try:
-            text = PunctEngine.fix(text)
-        except Exception:
-            pass
-
-        # 2. 简繁转换
+        # 1. 简繁转换
         if self.simplified:
             text = to_simplified(text)
 
-        # 3. 键入目标输入框
+        # 2. 键入目标输入框
         self._insert_text(text)
 
-        # 4. 浮窗呈现原生对勾徽章与严密垂直居中对齐文本
+        # 3. 浮窗呈现原生对勾徽章与严密垂直居中对齐文本
         self.hud.show("done", text, auto_hide=1.5)
         gc.collect()
 

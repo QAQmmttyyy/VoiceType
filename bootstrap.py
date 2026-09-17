@@ -40,10 +40,14 @@ PYTHON_BIN = os.environ.get("VOICETYPE_PYTHON") or sys.executable
 PYPI_INDEX = "https://pypi.tuna.tsinghua.edu.cn/simple"
 
 # 模型统一从 ModelScope 下载：国内 CDN 直连，实测 25MB/s 以上，无需代理。
+#
+# 只需要一个模型。SenseVoice 自带标点与逆文本规整，
+# 曾经额外挂过一个 Qwen2.5-0.5B 做标点修复，实测 67.7% 的输出
+# 被保真校验丢弃、且会把英文翻译成中文，已移除。
+# 详见 docs/标点方案.md。
 # (repo_id, 本地目录名, 预估体积MB)
 MODEL_SPECS = [
     ("iic/SenseVoiceSmall", "SenseVoiceSmall", 940),
-    ("Qwen/Qwen2.5-0.5B-Instruct", "Qwen2.5-0.5B-Instruct", 1000),
 ]
 
 STALL_TIMEOUT = 120  # 秒，下载体积长时间无增长即判定为停滞
