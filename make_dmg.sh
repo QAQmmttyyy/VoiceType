@@ -162,7 +162,7 @@ fi
 STATUS=""
 for _ in $(seq 1 60); do
     sleep 10
-    STATUS="$(xcrun notarytool info "$JOB_ID" --keychain-profile "$PROFILE" 2>/dev/null | awk '/^ *status:/{print $2}')"
+    STATUS="$(xcrun notarytool info "$JOB_ID" --keychain-profile "$PROFILE" 2>/dev/null | awk '/^ *status:/{$1=""; sub(/^ */, ""); print}')"
     [ -z "$STATUS" ] && continue
     echo "    状态: $STATUS"
     [ "$STATUS" != "In Progress" ] && break
